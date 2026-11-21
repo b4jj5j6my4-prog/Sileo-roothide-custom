@@ -21,7 +21,7 @@ permissions:
 jobs:
   build:
     name: 编译并上传 RootHide deb
-    runs-on: macos-14
+    runs-on: macos-15-intel
     timeout-minutes: 90
 
     steps:
