@@ -22,6 +22,7 @@ class PackageCollectionViewCell: SwipeCollectionViewCell {
     var numberOfItems: CGFloat = 0
     var alwaysHidesSeparator = false
     var stateBadgeView: PackageStateBadgeView?
+    private let architectureIndicatorView = UIView()
     
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -35,6 +36,7 @@ class PackageCollectionViewCell: SwipeCollectionViewCell {
     public var targetPackage: Package? {
         didSet {
             if let targetPackage = targetPackage {
+                updateArchitectureIndicator(targetPackage.architecture)
                 titleLabel?.text = targetPackage.name
                 authorLabel?.text = "\(targetPackage.version)"
                 if let repoName = targetPackage.sourceRepo?.repoName, let text=authorLabel?.text {
@@ -63,6 +65,7 @@ class PackageCollectionViewCell: SwipeCollectionViewCell {
     public var provisionalTarget: ProvisionalPackage? {
         didSet {
             if let provisionalTarget = provisionalTarget {
+                updateArchitectureIndicator(provisionalTarget.architecture?.rawValue)
                 titleLabel?.text = provisionalTarget.name ?? provisionalTarget.package
                 authorLabel?.text = "\(provisionalTarget.version)"
                 if let text = authorLabel?.text, let repoName = provisionalTarget.repository.name {
@@ -91,8 +94,10 @@ class PackageCollectionViewCell: SwipeCollectionViewCell {
         super.prepareForReuse()
         
         self.hasPurchased = false
+        architectureIndicatorView.isHidden = true
+        architectureIndicatorView.backgroundColor = nil
     }
-    
+
     override func awakeFromNib() {
         super.awakeFromNib()
         
@@ -102,6 +107,18 @@ class PackageCollectionViewCell: SwipeCollectionViewCell {
         self.isAccessibilityElement = true
         self.accessibilityTraits = .button
         self.delegate = self
+
+        architectureIndicatorView.translatesAutoresizingMaskIntoConstraints = false
+        architectureIndicatorView.isUserInteractionEnabled = false
+        architectureIndicatorView.isHidden = true
+        architectureIndicatorView.layer.cornerRadius = 2
+        contentView.addSubview(architectureIndicatorView)
+        NSLayoutConstraint.activate([
+            architectureIndicatorView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 4),
+            architectureIndicatorView.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 8),
+            architectureIndicatorView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -8),
+            architectureIndicatorView.widthAnchor.constraint(equalToConstant: 4)
+        ])
         
         stateBadgeView = PackageStateBadgeView(frame: .zero)
         stateBadgeView?.translatesAutoresizingMaskIntoConstraints = false
@@ -127,6 +144,28 @@ class PackageCollectionViewCell: SwipeCollectionViewCell {
         if !(targetPackage?.commercial ?? false) {
             titleLabel?.textColor = .sileoLabel
         }
+    }
+
+    private func updateArchitectureIndicator(_ rawArchitecture: String?) {
+        guard let architecture = rawArchitecture?.lowercased() else {
+            architectureIndicatorView.isHidden = true
+            return
+        }
+        let color: UIColor?
+        if architecture == "arm64e" || architecture == "iphoneos-arm64e" {
+            color = .systemGreen
+        } else if architecture == "arm64" || architecture == "iphoneos-arm64" {
+            color = .systemBlue
+        } else if architecture == "arm" || architecture == "iphoneos-arm" {
+            color = .systemOrange
+        } else if architecture == "all" {
+            color = .systemGray
+        } else {
+            color = nil
+        }
+        architectureIndicatorView.backgroundColor = color
+        architectureIndicatorView.isHidden = color == nil
+        accessibilityValue = color == nil ? nil : "架构 \(architecture)"
     }
     
     override func layoutSubviews() {

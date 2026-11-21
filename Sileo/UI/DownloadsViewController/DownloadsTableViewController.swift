@@ -62,10 +62,14 @@ class DownloadsTableViewController: SileoViewController {
         var package: Package
         var type: ActionType
         var progressCounter: CGFloat = 0.0
+        var aptProgress: CGFloat?
         var status: String?
         weak var cell: DownloadsTableViewCell?
         
         public var progress: CGFloat {
+            if let aptProgress = aptProgress {
+                return min(max(aptProgress, 0), 1)
+            }
             let progress = progressCounter / (type == .install ? 6.0 : 3.0)
             if progress > 1.0 {
                 return 1.0
@@ -440,15 +444,15 @@ class DownloadsTableViewController: SileoViewController {
         }
     }
     
-    private func statusWork(package: String, status: String) {
+    private func statusWork(package: String, status: String, progress: Double) {
         if !Thread.isMainThread {
             DispatchQueue.main.async {
-                self.statusWork(package: package, status: status)
+                self.statusWork(package: package, status: status, progress: progress)
             }
             return
         }
         guard let action = actions.first(where: { $0.package.package == package }) else { return }
-        action.progressCounter += 1
+        action.aptProgress = CGFloat(progress / 100.0)
         let ending = "(\(DPKGArchitecture.Architecture.roothide.rawValue))"
         if action.package.tags.contains(.roothide) && status.hasSuffix(ending) {
             if var origArch = action.package.origArchitecture {
@@ -569,10 +573,10 @@ class DownloadsTableViewController: SileoViewController {
         
         TabBarController.singleton?.updatePopup()
 
-        APTWrapper.performOperations(installs: installations + upgrades, removals: uninstallations, installDeps: installdeps, progressCallback: { _, statusValid, statusReadable, package in
-            NSLog("SileoLog: progressCallback \(statusValid) \(package) \(statusReadable)")
+        APTWrapper.performOperations(installs: installations + upgrades, removals: uninstallations, installDeps: installdeps, progressCallback: { progress, statusValid, statusReadable, package in
+            NSLog("SileoLog: progressCallback \(statusValid) \(package) \(statusReadable) \(progress)")
             if statusValid {
-                self.statusWork(package: package, status: statusReadable)
+                self.statusWork(package: package, status: statusReadable, progress: progress)
             }
         }, outputCallback: { output, pipe in
             NSLog("SileoLog: apt outputCallback \(pipe):\(output)")
@@ -615,7 +619,10 @@ class DownloadsTableViewController: SileoViewController {
                 let updatesNotIgnored = rawUpdates.filter({ $0.1?.wantInfo != .hold })
                 UIApplication.shared.applicationIconBadgeNumber = updatesNotIgnored.count
                 
-                _ = self.actions.map { $0.progressCounter = 7 }
+                _ = self.actions.map {
+                    $0.progressCounter = 7
+                    $0.aptProgress = 1
+                }
                 self.tableView?.reloadData()
                 
                 self.returnButtonAction = finish

@@ -795,7 +795,7 @@ final class DownloadManager {
             let destFileName = "/\(extractionPath.path)/\(packageID)_\(version)_\(architecture).deb"
             let destURL = URL(fileURLWithPath: destFileName)
             NSLog("SileoLog: destURL=\(destURL.path)")
-            try! FileManager.default.moveItem(at: fileURL, to: destURL)
+            try! FileManager.default.copyItem(at: fileURL, to: destURL)
         
             if IsAppAvailable("com.roothide.patcher") {
                 if ShareFileToApp("com.roothide.patcher", destFileName) {
@@ -814,6 +814,12 @@ final class DownloadManager {
             SileoAppDelegate.presentController(activity)
     }
     
+    public func exportDeb(package: Package) {
+        downloadDeb(package: package,
+                    msg: String(localizationKey: "Downloading_Package_Status"),
+                    handler: patchPackage)
+    }
+
     // call in main queue
     private func downloadDeb(package: Package, msg: String, handler: @escaping ((Package,URL) -> Void)) {
         var task:EvanderDownloader?

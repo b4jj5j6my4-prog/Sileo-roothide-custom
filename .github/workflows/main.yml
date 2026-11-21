@@ -1,8 +1,6 @@
 on:
-  push:
-    branches:
-      - main
-name: Build
+  workflow_dispatch:
+name: 上游构建（需要原作者私有凭据）
 jobs:
   make:
     name: Build and Upload Sileo

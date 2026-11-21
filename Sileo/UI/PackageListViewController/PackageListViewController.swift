@@ -162,9 +162,10 @@ class PackageListViewController: SileoScrollViewController, UIGestureRecognizerD
         if showWishlist {
             let exportBtn = UIBarButtonItem(title: String(localizationKey: "Export"), style: .plain, target: self, action: #selector(self.exportButtonClicked(_:)))
             self.navigationItem.leftBarButtonItem = exportBtn
-            
-            let wishlistBtn = UIBarButtonItem(title: String(localizationKey: "Wishlist"), style: .plain, target: self, action: #selector(self.showWishlist(_:)))
-            self.navigationItem.rightBarButtonItem = wishlistBtn
+
+            let backupBtn = UIBarButtonItem(image: UIImage(systemName: "archivebox"), style: .plain, target: self, action: #selector(self.showBackupCenter(_:)))
+            backupBtn.accessibilityLabel = "插件备份"
+            self.navigationItem.rightBarButtonItem = backupBtn
         }
         
         if packagesLoadIdentifier.contains("--wishlist") {
@@ -951,6 +952,120 @@ extension PackageListViewController: UISearchResultsUpdating {
     }
 }
 
+extension PackageListViewController {
+    @objc func showBackupCenter(_ sender: UIBarButtonItem?) {
+        let sheet = UIAlertController(title: "插件备份", message: nil, preferredStyle: .actionSheet)
+        let actions: [(String, UIAlertAction.Style, () -> Void)] = [
+            ("全部插件备份", .default, { self.backupAllPackages() }),
+            ("选择插件备份", .default, { self.choosePackagesForBackup() }),
+            ("配置备份", .default, { self.runBackup { try SileoBackupStore.backupPreferences() } }),
+            ("插件源备份", .default, { self.runBackup { try SileoBackupStore.backupSources() } }),
+            ("插件恢复", .default, { self.restorePackages() }),
+            ("配置恢复", .default, { self.confirmRestore("恢复配置会覆盖现有同名配置文件。") { try SileoBackupStore.restorePreferences() } }),
+            ("插件源恢复", .default, { self.confirmRestore("恢复软件源会把备份中的源合并到当前列表。") { try SileoBackupStore.restoreSources() } }),
+            ("查看备份", .default, { self.showBackupSummary() }),
+            ("清除备份", .destructive, { self.confirmClearBackup() })
+        ]
+        actions.forEach { item in
+            sheet.addAction(UIAlertAction(title: item.0, style: item.1) { _ in item.2() })
+        }
+        sheet.addAction(UIAlertAction(title: "取消", style: .cancel))
+        sheet.popoverPresentationController?.barButtonItem = sender
+        present(sheet, animated: true)
+    }
+
+    private func backupAllPackages() {
+        let packages = Array(PackageListManager.shared.installedPackages.values)
+        runBackup { try SileoBackupStore.backupPackages(packages) }
+    }
+
+    private func choosePackagesForBackup() {
+        let packages = Array(PackageListManager.shared.installedPackages.values).sorted {
+            $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+        }
+        let controller = SileoPackageBackupSelectionController(packages: packages) { selected in
+            self.runBackup { try SileoBackupStore.backupPackages(selected) }
+        }
+        navigationController?.pushViewController(controller, animated: true)
+    }
+
+    private func runBackup(_ work: @escaping () throws -> Int) {
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                let count = try work()
+                DispatchQueue.main.async { self.showBackupMessage("备份完成", "已保存 \(count) 项。") }
+            } catch {
+                DispatchQueue.main.async { self.showBackupMessage("操作失败", error.localizedDescription) }
+            }
+        }
+    }
+
+    private func confirmRestore(_ message: String, work: @escaping () throws -> Int) {
+        let alert = UIAlertController(title: "确认恢复", message: message, preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "取消", style: .cancel))
+        alert.addAction(UIAlertAction(title: "恢复", style: .default) { _ in
+            self.runBackup(work)
+        })
+        present(alert, animated: true)
+    }
+
+    private func restorePackages() {
+        guard !DownloadManager.shared.queueRunning else {
+            showBackupMessage("无法恢复", "当前安装队列正在运行。")
+            return
+        }
+        do {
+            let records = try SileoBackupStore.packageRecords()
+            var restored = 0
+            var missing: [String] = []
+            records.forEach { record in
+                var package = SileoBackupStore.offlinePackage(identifier: record.identifier, version: record.version)
+                for repo in RepoManager.shared.repoList where package == nil {
+                    package = repo.getPackage(identifier: record.identifier, version: record.version, ignoreArch: true)
+                }
+                package = package ?? PackageListManager.shared.newestPackage(identifier: record.identifier)
+                if let package = package {
+                    DownloadManager.shared.add(package: package, queue: .installations)
+                    restored += 1
+                } else {
+                    missing.append(record.identifier)
+                }
+            }
+            DownloadManager.shared.reloadData(recheckPackages: true)
+            NotificationCenter.default.post(name: PackageQueueButton.actionPerformedNotification, object: nil)
+            if restored > 0 { TabBarController.singleton?.presentPopupController() }
+            let suffix = missing.isEmpty ? "" : "\n未在当前软件源找到：\n" + missing.joined(separator: "\n")
+            showBackupMessage("恢复已加入队列", "已加入 \(restored) 个插件。\(suffix)")
+        } catch {
+            showBackupMessage("操作失败", error.localizedDescription)
+        }
+    }
+
+    private func showBackupSummary() {
+        showBackupMessage("备份信息", SileoBackupStore.summary())
+    }
+
+    private func confirmClearBackup() {
+        let alert = UIAlertController(title: "清除备份", message: "将删除全部插件、配置和软件源备份，无法撤销。", preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "取消", style: .cancel))
+        alert.addAction(UIAlertAction(title: "清除", style: .destructive) { _ in
+            do {
+                try SileoBackupStore.clear()
+                self.showBackupMessage("清除完成", "全部备份已删除。")
+            } catch {
+                self.showBackupMessage("操作失败", error.localizedDescription)
+            }
+        })
+        present(alert, animated: true)
+    }
+
+    private func showBackupMessage(_ title: String, _ message: String) {
+        let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "完成", style: .cancel))
+        present(alert, animated: true)
+    }
+}
+
 extension Collection {
     subscript (safe index: Index) -> Element? {
         return indices.contains(index) ? self[index] : nil
@@ -964,4 +1079,273 @@ enum PackageListSection {
     case canister
     case reallyBoringList
     case searchHistoryList
+}
+
+
+private struct SileoPackageBackupRecord: Codable {
+    let identifier: String
+    let name: String
+    let version: String
+    let architecture: String?
+    let source: String?
+}
+
+private struct SileoSourceBackupRecord: Codable {
+    let url: String
+    let suite: String
+    let components: [String]
+    let rawEntry: String
+}
+
+private enum SileoBackupStore {
+    private static let manager = FileManager.default
+    private static let root = URL(fileURLWithPath: "/var/mobile/Documents/SileoBackups", isDirectory: true)
+    private static let packagesFile = root.appendingPathComponent("packages.json")
+    private static let sourcesFile = root.appendingPathComponent("sources.json")
+    private static let debsDirectory = root.appendingPathComponent("debs", isDirectory: true)
+    private static let preferencesDirectory = root.appendingPathComponent("preferences", isDirectory: true)
+    private static let preferencesSource = URL(fileURLWithPath: "\(CommandPath.prefix)/var/mobile/Library/Preferences", isDirectory: true)
+
+    static func ensureRoot() throws {
+        try manager.createDirectory(at: root, withIntermediateDirectories: true, attributes: [FileAttributeKey.posixPermissions: 0o755])
+    }
+
+    static func backupPackages(_ packages: [Package]) throws -> Int {
+        try ensureRoot()
+        let records = packages.sorted { $0.package < $1.package }.map {
+            SileoPackageBackupRecord(identifier: $0.package,
+                                     name: $0.name,
+                                     version: $0.version,
+                                     architecture: $0.architecture,
+                                     source: $0.sourceRepo?.rawURL)
+        }
+        let data = try JSONEncoder.sileoBackup.encode(records)
+        try data.write(to: packagesFile, options: .atomic)
+        if manager.fileExists(atPath: debsDirectory.path) {
+            try manager.removeItem(at: debsDirectory)
+        }
+        try manager.createDirectory(at: debsDirectory, withIntermediateDirectories: true)
+        let script = """
+        set -e
+        pkg="$1"
+        arch="$2"
+        out="$3"
+        work="$(/usr/bin/mktemp -d /var/tmp/sileo-repack.XXXXXX)"
+        trap '/usr/bin/rm -rf "$work"' EXIT
+        root="$work/root"
+        /usr/bin/mkdir -p "$root/DEBIAN"
+        list="/Library/dpkg/info/$pkg.list"
+        test -f "$list"
+        /usr/bin/sed -e 's#^/##' -e '/^$/d' "$list" > "$work/files"
+        cd /
+        /usr/bin/tar -cf - -T "$work/files" 2>/dev/null | /usr/bin/tar -xf - -C "$root"
+        /usr/bin/dpkg-query -s "$pkg" | /usr/bin/sed '/^Status:/d' > "$root/DEBIAN/control"
+        if ! /usr/bin/grep -q '^Architecture:' "$root/DEBIAN/control"; then
+            echo "Architecture: $arch" >> "$root/DEBIAN/control"
+        fi
+        for ext in preinst postinst prerm postrm conffiles triggers md5sums; do
+            src="/Library/dpkg/info/$pkg.$ext"
+            test ! -f "$src" || /usr/bin/cp -p "$src" "$root/DEBIAN/$ext"
+        done
+        version="$(/usr/bin/dpkg-query -W -f='${Version}' "$pkg")"
+        safe_version="$(printf '%s' "$version" | /usr/bin/sed 's/:/%3a/g; s#/#%2f#g')"
+        /usr/bin/dpkg-deb -Zxz --root-owner-group -b "$root" "$out/${pkg}_${safe_version}_${arch}.deb"
+        """
+        for package in packages {
+            _ = spawnAsRoot(args: [CommandPath.sh,
+                                   "-c",
+                                   script,
+                                   "sileo-repack",
+                                   package.package,
+                                   package.architecture ?? DpkgWrapper.architecture.primary.rawValue,
+                                   rootfs(debsDirectory.path)])
+        }
+        return records.count
+    }
+
+    static func offlinePackage(identifier: String, version: String) -> Package? {
+        guard let files = try? manager.contentsOfDirectory(at: debsDirectory,
+                                                           includingPropertiesForKeys: nil,
+                                                           options: [.skipsHiddenFiles]) else { return nil }
+        let candidates = files.filter { $0.pathExtension.lowercased() == "deb" && $0.lastPathComponent.hasPrefix(identifier + "_") }
+        for file in candidates {
+            guard let package = PackageListManager.shared.package(url: file), package.version == version else { continue }
+            let temporary = manager.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension("deb")
+            do {
+                try manager.copyItem(at: file, to: temporary)
+                return PackageListManager.shared.package(url: temporary)
+            } catch {
+                continue
+            }
+        }
+        return nil
+    }
+
+    static func packageRecords() throws -> [SileoPackageBackupRecord] {
+        guard manager.fileExists(atPath: packagesFile.path) else { throw backupError("没有插件备份。") }
+        return try JSONDecoder().decode([SileoPackageBackupRecord].self, from: Data(contentsOf: packagesFile))
+    }
+
+    static func backupSources() throws -> Int {
+        try ensureRoot()
+        let records = RepoManager.shared.repoList.map {
+            SileoSourceBackupRecord(url: $0.rawURL, suite: $0.suite, components: $0.components, rawEntry: $0.rawEntry)
+        }
+        try JSONEncoder.sileoBackup.encode(records).write(to: sourcesFile, options: .atomic)
+        return records.count
+    }
+
+    static func restoreSources() throws -> Int {
+        guard manager.fileExists(atPath: sourcesFile.path) else { throw backupError("没有插件源备份。") }
+        let records = try JSONDecoder().decode([SileoSourceBackupRecord].self, from: Data(contentsOf: sourcesFile))
+        let before = RepoManager.shared.repoList.count
+        let raw = records.map { record -> String in
+            if !record.rawEntry.isEmpty { return record.rawEntry }
+            return "Types: deb\nURIs: \(record.url)\nSuites: \(record.suite)\nComponents: \(record.components.joined(separator: " "))"
+        }.joined(separator: "\n\n")
+        let temporaryDirectory = manager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try manager.createDirectory(at: temporaryDirectory, withIntermediateDirectories: true)
+        let temporary = temporaryDirectory.appendingPathComponent("sileo.sources")
+        try raw.write(to: temporary, atomically: true, encoding: .utf8)
+        RepoManager.shared.parseSourcesFile(at: temporary)
+        RepoManager.shared.writeListToFile()
+        try? manager.removeItem(at: temporaryDirectory)
+        let count = max(RepoManager.shared.repoList.count - before, 0)
+        if count > 0 {
+            NotificationCenter.default.post(name: SourcesViewController.refreshReposNotification, object: nil)
+        }
+        return count
+    }
+
+    static func backupPreferences() throws -> Int {
+        try ensureRoot()
+        if manager.fileExists(atPath: preferencesDirectory.path) {
+            try manager.removeItem(at: preferencesDirectory)
+        }
+        try manager.createDirectory(at: preferencesDirectory, withIntermediateDirectories: true)
+        let files = try manager.contentsOfDirectory(at: preferencesSource,
+                                                    includingPropertiesForKeys: [.isRegularFileKey],
+                                                    options: [.skipsHiddenFiles])
+        var count = 0
+        for file in files where file.pathExtension.lowercased() == "plist" {
+            let name = file.deletingPathExtension().lastPathComponent.lowercased()
+            if name.hasPrefix("com.apple.") || name.hasPrefix("group.com.apple.") { continue }
+            let destination = preferencesDirectory.appendingPathComponent(file.lastPathComponent)
+            do {
+                try manager.copyItem(at: file, to: destination)
+                count += 1
+            } catch {
+                continue
+            }
+        }
+        return count
+    }
+
+    static func restorePreferences() throws -> Int {
+        guard manager.fileExists(atPath: preferencesDirectory.path) else { throw backupError("没有配置备份。") }
+        let files = try manager.contentsOfDirectory(at: preferencesDirectory,
+                                                    includingPropertiesForKeys: [.isRegularFileKey],
+                                                    options: [.skipsHiddenFiles])
+        var count = 0
+        for file in files where file.pathExtension.lowercased() == "plist" {
+            let destination = preferencesSource.appendingPathComponent(file.lastPathComponent)
+            let temp = manager.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            do {
+                try manager.copyItem(at: file, to: temp)
+                if manager.fileExists(atPath: destination.path) { try manager.removeItem(at: destination) }
+                try manager.moveItem(at: temp, to: destination)
+                count += 1
+            } catch {
+                try? manager.removeItem(at: temp)
+            }
+        }
+        return count
+    }
+
+    static func summary() -> String {
+        let packageCount = (try? packageRecords().count) ?? 0
+        let sourceCount: Int = {
+            guard let data = try? Data(contentsOf: sourcesFile),
+                  let records = try? JSONDecoder().decode([SileoSourceBackupRecord].self, from: data) else { return 0 }
+            return records.count
+        }()
+        let preferenceCount = (try? manager.contentsOfDirectory(atPath: preferencesDirectory.path).count) ?? 0
+        let attributes = try? manager.attributesOfItem(atPath: root.path)
+        let date = attributes?[.modificationDate] as? Date
+        let dateText = date.map { DateFormatter.localizedString(from: $0, dateStyle: .medium, timeStyle: .short) } ?? "无"
+        return "位置：\(root.path)\n插件：\(packageCount)\n配置：\(preferenceCount)\n插件源：\(sourceCount)\n更新时间：\(dateText)"
+    }
+
+    static func clear() throws {
+        if manager.fileExists(atPath: root.path) { try manager.removeItem(at: root) }
+    }
+
+    private static func backupError(_ message: String) -> NSError {
+        NSError(domain: "SileoBackup", code: 1, userInfo: [NSLocalizedDescriptionKey: message])
+    }
+}
+
+private extension JSONEncoder {
+    static var sileoBackup: JSONEncoder {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        return encoder
+    }
+}
+
+private final class SileoPackageBackupSelectionController: UITableViewController {
+    private let packages: [Package]
+    private var selected = Set<String>()
+    private let completion: ([Package]) -> Void
+
+    init(packages: [Package], completion: @escaping ([Package]) -> Void) {
+        self.packages = packages
+        self.completion = completion
+        super.init(style: .grouped)
+        title = "选择插件备份"
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        tableView.allowsMultipleSelection = true
+        navigationItem.rightBarButtonItem = UIBarButtonItem(title: "备份", style: .done, target: self, action: #selector(backupSelected))
+        navigationItem.leftBarButtonItem = UIBarButtonItem(title: "全选", style: .plain, target: self, action: #selector(selectAllPackages))
+    }
+
+    override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
+        packages.count
+    }
+
+    override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+        let identifier = "SileoPackageBackupSelectionCell"
+        let cell = tableView.dequeueReusableCell(withIdentifier: identifier) ?? UITableViewCell(style: .subtitle, reuseIdentifier: identifier)
+        let package = packages[indexPath.row]
+        cell.textLabel?.text = package.name
+        cell.detailTextLabel?.text = "\(package.package)  \(package.version)"
+        cell.imageView?.image = package.defaultIcon
+        cell.accessoryType = selected.contains(package.package) ? .checkmark : .none
+        return cell
+    }
+
+    override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+        let package = packages[indexPath.row]
+        if selected.contains(package.package) { selected.remove(package.package) } else { selected.insert(package.package) }
+        tableView.reloadRows(at: [indexPath], with: .none)
+    }
+
+    @objc private func selectAllPackages() {
+        selected = Set(packages.map { $0.package })
+        tableView.reloadData()
+    }
+
+    @objc private func backupSelected() {
+        let values = packages.filter { selected.contains($0.package) }
+        guard !values.isEmpty else { return }
+        completion(values)
+        navigationController?.popViewController(animated: true)
+    }
 }

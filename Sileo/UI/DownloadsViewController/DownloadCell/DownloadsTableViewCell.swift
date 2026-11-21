@@ -81,10 +81,11 @@ class DownloadsTableViewCell: BaseSubtitleTableViewCell {
             var progress = action.progress
             progress = (progress / 1.0) * 0.3
             self.progress = progress + 0.7
+            let percent = Int((self.progress * 100).rounded())
             if let status = action.status {
-                self.subtitle = status
+                self.subtitle = "\(status)  \(percent)%"
             } else {
-                self.subtitle = String(localizationKey: "Ready_Status")
+                self.subtitle = "\(String(localizationKey: "Ready_Status"))  \(percent)%"
             }
         } else if let download = download {
             self.progress = (download.progress / 1.0) * 0.7
@@ -101,9 +102,10 @@ class DownloadsTableViewCell: BaseSubtitleTableViewCell {
                     if download.totalBytesExpectedToWrite==NSURLSessionTransferSizeUnknown {
                         self.subtitle = ByteCountFormatter.string(fromByteCount: Int64(download.totalBytesWritten), countStyle: .file) + " ..."
                     } else {
+                        let percent = Int((self.progress * 100).rounded())
                         self.subtitle = String(format: String(localizationKey: "Download_Progress"),
                                                ByteCountFormatter.string(fromByteCount: Int64(download.totalBytesWritten), countStyle: .file),
-                                               ByteCountFormatter.string(fromByteCount: Int64(download.totalBytesExpectedToWrite), countStyle: .file))
+                                               ByteCountFormatter.string(fromByteCount: Int64(download.totalBytesExpectedToWrite), countStyle: .file)) + "  \(percent)%"
                     }
                 } else {
                     self.subtitle = String(localizationKey: "Download_Starting")

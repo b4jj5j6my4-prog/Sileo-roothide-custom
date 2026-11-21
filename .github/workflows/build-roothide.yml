@@ -1,0 +1,80 @@
+name: 编译 Sileo RootHide
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "Sileo/**"
+      - "SileoRootWrapper/**"
+      - "giveMeRoot/**"
+      - "patches/**"
+      - "layout/**"
+      - "Makefile"
+      - "Sileo.xcodeproj/**"
+      - ".github/workflows/build-roothide.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: 编译并上传 RootHide deb
+    runs-on: macos-14
+    timeout-minutes: 90
+
+    steps:
+      - name: 检出源码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 选择 Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: 安装 Procursus 构建工具
+        shell: bash
+        run: |
+          set -euxo pipefail
+          curl -fL -o bootstrap.tar.zst \
+            https://apt.procurs.us/bootstraps/big_sur/bootstrap-darwin-amd64.tar.zst
+          sudo tar --preserve-permissions -xf bootstrap.tar.zst -C /
+          echo "/opt/procursus/sbin:/opt/procursus/bin" >> "$GITHUB_PATH"
+          sudo /opt/procursus/bin/apt update
+          sudo /opt/procursus/bin/apt install \
+            zstd apt-utils ldid xz-utils bzip2 lz4 -y \
+            --allow-downgrades \
+            -oDpkg::Options::=--force-confdef \
+            -oDpkg::Options::=--force-confnew
+
+      - name: 编译 RootHide deb
+        shell: bash
+        env:
+          PATH: /opt/procursus/sbin:/opt/procursus/bin:/usr/bin:/bin:/usr/sbin:/sbin
+        run: |
+          set -euxo pipefail
+          make clean
+          make package DEBUG=0 SILEO_PLATFORM=iphoneos-arm64e
+
+      - name: 检查产物
+        shell: bash
+        run: |
+          set -euxo pipefail
+          shopt -s nullglob
+          debs=(packages/*_iphoneos-arm64e.deb)
+          test "${#debs[@]}" -gt 0
+          for deb in "${debs[@]}"; do
+            /opt/procursus/bin/dpkg-deb -I "$deb"
+            /opt/procursus/bin/dpkg-deb -c "$deb"
+          done
+
+      - name: 上传 deb
+        uses: actions/upload-artifact@v4
+        with:
+          name: Sileo-RootHide
+          path: packages/*_iphoneos-arm64e.deb
+          if-no-files-found: error
+          retention-days: 14

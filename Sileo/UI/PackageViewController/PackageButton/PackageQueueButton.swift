@@ -389,7 +389,7 @@ class PackageQueueButton: PackageButton {
         return paymentInfo.purchased && paymentInfo.available
     }
     
-    private func requestQueuePackage(package: Package, queue: DownloadManagerQueue)
+    func requestQueuePackage(package: Package, queue: DownloadManagerQueue)
     {
         NSLog("SileoLog: requestQueuePackage \(package.package)=\(package.version) commercial=\(package.commercial) \(package.sourceRepo):\(package.sourceRepo?.rawURL) purchased=\(self.hasPurchased) queue=\(queue.rawValue)")
         

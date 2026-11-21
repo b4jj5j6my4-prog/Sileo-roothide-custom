@@ -672,7 +672,27 @@ class PackageViewController: SileoViewController, PackageQueueButtonDataProvider
             return
         }
         
-        let sharePopup = UIAlertController(title: nil, message: nil, preferredStyle: .actionSheet)
+        let sharePopup = UIAlertController(title: "操作", message: nil, preferredStyle: .actionSheet)
+
+        if installedPackage != nil {
+            if !package.fromStatusFile || PackageListManager.shared.newestPackage(identifier: package.package) != nil {
+                sharePopup.addAction(UIAlertAction(title: "重新安装", style: .default) { _ in
+                    if package.fromStatusFile {
+                        self.downloadButton.showVersionPrompt(nil)
+                    } else {
+                        self.downloadButton.requestQueuePackage(package: package, queue: .installations)
+                    }
+                })
+            }
+            sharePopup.addAction(UIAlertAction(title: "卸载", style: .destructive) { _ in
+                self.downloadButton.requestQueuePackage(package: package, queue: .uninstallations)
+            })
+        }
+
+        sharePopup.addAction(UIAlertAction(title: "选择版本", style: .default) { _ in
+            self.downloadButton.showVersionPrompt(nil)
+        })
+
         let shareAction = UIAlertAction(title: String(localizationKey: "Package_Share_Action"), style: .default) { _ in
             var packageString = "\(package.name ?? package.package) - \(URLManager.url(package: package.package))"
             if let repo = package.sourceRepo {
@@ -683,6 +703,16 @@ class PackageViewController: SileoViewController, PackageQueueButtonDataProvider
             self.present(activityViewController, animated: true, completion: nil)
         }
         sharePopup.addAction(shareAction)
+
+        if package.filename != nil || package.local_deb != nil {
+            sharePopup.addAction(UIAlertAction(title: "下载安装包", style: .default) { _ in
+                DownloadManager.shared.exportDeb(package: package)
+            })
+        }
+
+        sharePopup.addAction(UIAlertAction(title: "查看插件包信息", style: .default) { _ in
+            self.showPackageInformation(package)
+        })
         
         if let author = package.author {
             if let name = author.name {
@@ -773,6 +803,22 @@ class PackageViewController: SileoViewController, PackageQueueButtonDataProvider
             sharePopup.view.tintColor = tintColor
         }
         self.present(sharePopup, animated: true)
+    }
+
+    func showPackageInformation(_ package: Package) {
+        let fields = [
+            ("名称", package.name),
+            ("标识符", package.package),
+            ("版本", package.version),
+            ("架构", package.architecture ?? "未知"),
+            ("作者", package.author?.name ?? package.maintainer?.name ?? "未知"),
+            ("来源", package.sourceRepo?.displayName ?? "本地/已安装"),
+            ("文件", package.filename ?? package.local_deb ?? "未知")
+        ]
+        let message = fields.map { "\($0.0)：\($0.1)" }.joined(separator: "\n")
+        let alert = UIAlertController(title: "插件包信息", message: message, preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "完成", style: .cancel))
+        present(alert, animated: true)
     }
 
     func mailComposeController(_ controller: MFMailComposeViewController, didFinishWith result: MFMailComposeResult, error: Error?) {

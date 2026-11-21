@@ -106,19 +106,24 @@ class APTWrapper {
     }
 
     public class func installProgress(aptStatus: String) -> (Bool, Double, String, String) {
-        let statusParts = aptStatus.components(separatedBy: ":")
-        if statusParts.count < 4 {
+        guard aptStatus.hasPrefix("pmstatus:") else {
             return (false, 0, "", "")
         }
-        if statusParts[0] != "pmstatus" {
+        let payload = String(aptStatus.dropFirst("pmstatus:".count))
+        let parts = payload.components(separatedBy: ":")
+        guard parts.count >= 3 else {
             return (false, 0, "", "")
         }
-
-        let packageName = statusParts[1]
-        guard let rawProgress = Double(statusParts[2]) else {
+        var progressIndex: Int?
+        for index in 1..<(parts.count - 1) where Double(parts[index]) != nil {
+            progressIndex = index
+            break
+        }
+        guard let index = progressIndex, let rawProgress = Double(parts[index]) else {
             return (false, 0, "", "")
         }
-        let statusReadable = statusParts[3]
+        let packageName = parts[..<index].joined(separator: ":").components(separatedBy: ":").first ?? ""
+        let statusReadable = parts[(index + 1)...].joined(separator: ":")
         return (true, rawProgress, statusReadable, packageName)
     }
 
